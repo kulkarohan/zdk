@@ -1,45 +1,136 @@
-## ZDK: The Zora Development Kit
+# Cryptomedia Collections
 
-| Statements                                                                    | Branches                                                                    | Functions                                                                 | Lines                                                                    |
-| ----------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| ![Statements](https://img.shields.io/badge/Coverage-95.36%25-brightgreen.svg) | ![Branches](https://img.shields.io/badge/Coverage-93.88%25-brightgreen.svg) | ![Functions](https://img.shields.io/badge/Coverage-90%25-brightgreen.svg) | ![Lines](https://img.shields.io/badge/Coverage-96.14%25-brightgreen.svg) |
+_"The creator community will be equally as important to this next crypto boom as the developer community was to the DeFi boom SS 2020. The goal of tools in the creator boom should be the same: **maximize liquidity optimization for market suppliers and reward community.** The suppliers aka market makers in this case, however, are the creators."_ - https://zora.co/blog/creative-composability
 
-### Overview
+**This hack is an attempt to get closer to that goal.**
 
-The Zora Development Kit (ZDK) is a tool for developers to simply and reliably interact with the Zora Protocol.
-The ZDK is written in Typescript and can be used in any environment in which Javascript can be run.
+A common theme among recent conversations with middle-class / emerging artists is that many want their art in as many hands as possible.
 
-The ZDK has 4 primary exports plus some types:
+[Fractional.art](https://fractional.art/) helps this -- but long-term I think it'd be great to embed fractionalization (or something similar) into Zora's protocol itself.
 
-- [Zora](docs/zora.md)
-- [Utils](docs/utils.md)
-- [Addresses](docs/addresses.md)
-- [Metadata](docs/metadata.md)
-- [User Info](docs/users.md)
+After tinkering inside [ourzora/core](https://github.com/ourzora/core), I discovered a way to build similar functionality without touching the contracts at all, but through the ZDK.
 
-### Installation
+First I'll show the complete minting process then explain the changes.
 
-```bash
-yarn add @zoralabs/zdk
+### All Together!
+
+```typescript
+import { Zora } from '@zoralabs/zdk'
+import { Wallet } from 'ethers'
+import {
+  constructBidShares,
+  constructCollectionData,
+  constructCollectionMediaData,
+  mintCollection,
+  generateMetadata,
+  sha256FromBuffer,
+} from '@zoralabs/zdk'
+
+const wallet = Wallet.createRandom()
+const zora = new Zora(wallet, 4)
+
+const contentHash = sha256FromBuffer(Buffer.from('testing zora collections ...'))
+const collectionSupply = 4
+
+const collectionData = constructCollectionData(contentHash, collectionSupply)
+
+const metadataJSON = generateMetadata('zora-20210101', {
+  version: 'zora-20210101',
+  name: 'testing zora collections ...',
+  description: collectionData['mediaTree'],
+  mimeType: 'text/plain',
+})
+
+const metadataHash = sha256FromBuffer(Buffer.from(metadataJSON))
+const metadataURI = 'https://ipfs.io/ipfs/QmaipCiN95UGEHRkxVWYmj8bcAYeyxL9LqjHACpvWzcHAt'
+const contentURI = 'https://ipfs.io/ipfs/QmXxUwtS2HaCGpY3kKDs7ncy79pu92YZ1KtawQjmox6naf'
+
+const collectionMediaData = constructCollectionMediaData(
+  collectionData,
+  contentURI,
+  metadataURI,
+  metadataHash
+)
+
+const bidShares = constructBidShares(
+  10, // creator share
+  90, // owner share
+  0 // prevOwner share
+)
+
+mintCollection(collectionMediaData, bidShares, zora)
+
+/** Rinkeby Transaction Hashes
+ * 0x824e8147861840abc105023e2af161c5b72bfb39c8478541c2102704a2160161 (ZORA Token ID 3565)
+ * 0x5af4b4214d6d29bd1ea4e8ea0d6def373a4f8cfcf4469ab2520c6a03f2422b32 (ZORA Token ID 3566)
+ * 0x3e4d8cf7eb2e04cc2910267e3713d39503fa69e57a6b2dea0ddbbdd276fa0f09 (ZORA Token ID 3567)
+ * 0xc4b9ef87a3d6a6a896f78808f25cae06f63b91b6991dba0715095c2ba9488913 (ZORA Token ID 3568)
+ */
 ```
 
-### Guides
+## Some Notes
 
-- [minting](docs/minting.md)
-- [bidding](docs/bidding.md)
+Collections invert fractionalization by allowing a creator to create "copies" of their NFT, instead of dividing it to pieces.
+Each "copy" still contains all the properties of [cryptomedia.wtf](https://cryptomedia.wtf/), but what makes it a part of a _collection_ is it points to a merkle tree proving its relation to the rest of the supply.
 
-Additional information about the Zora ecosystem can be found at [https://zora.engineering/](https://zora.engineering/)
+I see this is a building block towards a platform enabling creators to exercise features like _"anyone who holds a piece of collection X will receive Y amounts of Z in the future"_ on Zora.
 
-## Development
+A few features/TODOs for this initial MVP:
 
-`git clone ...`
+- A metadata scheme for collections to ensure the merkle tree is stored upon minting
+- Utility functions to verify an NFT's existence in a collection
+- Allow multiple content hashes so creators can create a collection of different NFTs (eg. Punks) natively on Zora
 
-Run tests
+\*ik you guys already use the term _'collection'_ but since its a cool term and this is just a mvp im rolling with it
 
-In a new terminal, start up a blockchain
+## Technical Details
 
-`yarn chain`
+### CollectionData
 
-In your current terminal, run tests
+A `CollectionData` type composed of four fields:
 
-`yarn test`
+```typescript
+type CollectionData = {
+  mediaSupply: number // Number of media files in collection
+  mediaContentHashes: BytesLike[] // Content hashes of media in collection
+  collectionHash: BytesLike // Root of collection's merkle tree
+  mediaTree: string // JSON representation of collection's merkle tree
+}
+```
+
+### constructCollectionData
+
+`CollectionData` is generated by the `constructCollectionData` function, which expects two parameters: `contentHash` and `supply`
+
+This function utilizes three custom helper functions:
+
+- `validateSupply` ensures the number provided for `supply` is an integer
+- `constructCollectionContentHashes` uses the provided `contentHash` to generate unique content hashes for each media in the collection
+- `constructCollectionTree` uses the new content hashes to construct a merkle tree of the collection
+
+Returns a populated `CollectionData` type
+
+### constructCollectionMediaData
+
+Wraps `constructMediaData` by taking
+
+- a populated `CollectionData` type, and
+- existing ZDK properties `tokenURI`, `metadataURI`, and `metadataHash`
+
+to construct `MediaData` for each media in a collection.
+
+Returns an array of populated `MediaData` types
+
+### mintCollection
+
+Wraps `zora.mint` by taking
+
+- a `MediaData` array returned by `constructCollectionMediaData`
+- `BidShares` returned by `constructBidShares`, and
+- an instance of `Zora`
+
+and mints each media in a collection.
+
+## Feedback
+
+hmu `kulk#3357` on Discord

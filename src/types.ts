@@ -63,3 +63,13 @@ export type EIP712Domain = {
   chainId: number
   verifyingContract: string
 }
+
+/**
+ * Type to represent a Collection
+ */
+export type CollectionData = {
+  mediaSupply: number
+  mediaContentHashes: BytesLike[]
+  collectionHash: BytesLike
+  mediaTree: string
+}

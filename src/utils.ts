@@ -10,6 +10,7 @@ import {
   EIP712Domain,
   EIP712Signature,
   MediaData,
+  CollectionData,
 } from './types'
 import { Decimal } from './Decimal'
 import {
@@ -26,6 +27,9 @@ import axios from 'axios'
 import { BigNumber, BigNumberish } from '@ethersproject/bignumber'
 import { ethers, Wallet } from 'ethers'
 import { ContractTransaction } from '@ethersproject/contracts'
+import { MerkleTree } from 'merkletreejs'
+import { SHA256 } from 'crypto-js'
+import { Zora } from './zora'
 
 // // https://etherscan.io/address/0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2
 export const WETH_MAINNET = '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2'
@@ -646,4 +650,146 @@ export async function unwrapWETH(
   const abi = ['function withdraw(uint256) public']
   const weth = new ethers.Contract(wethAddress, abi, wallet)
   return weth.withdraw(amount)
+}
+
+/********************
+ * Collection Utilities
+ ********************
+ */
+
+/**
+ * Constructs a CollectionData type
+ *
+ * @param contentHash
+ * @param supply
+ * @returns
+ */
+export function constructCollectionData(
+  contentHash: BytesLike,
+  supply: number
+): CollectionData {
+  validateBytes32(contentHash)
+  validateSupply(supply)
+
+  const [mediaTreeLeaves, mediaContentHashes] = constructCollectionContentHashes(
+    contentHash,
+    supply
+  )
+
+  const [mediaTreeRoot, mediaTree] = constructCollectionTree(mediaTreeLeaves)
+
+  return {
+    mediaSupply: supply,
+    mediaContentHashes: mediaContentHashes,
+    collectionHash: mediaTreeRoot,
+    mediaTree: mediaTree,
+  }
+}
+
+/**
+ * Creates content hashes for each media in a collection
+ *
+ * @param originalContentHash
+ * @param supply
+ * @returns
+ */
+function constructCollectionContentHashes(
+  originalContentHash: BytesLike,
+  supply: number
+): [CryptoJS.lib.WordArray[], BytesLike[]] {
+  // Remove 0x prefix (if exists) and create content hashes for each media in collection
+  // CryptoJS is used for compatibility with 'merkletreejs'
+  const originalContentHashStrippedPrefix = stripHexPrefix(String(originalContentHash))
+  // Store generated content hashes
+  const contentHashWordArrays: CryptoJS.lib.WordArray[] = []
+  const contentHashHexStrings: BytesLike[] = []
+
+  // Store generated hashes in both formats
+  for (let i = 1; i <= supply; i++) {
+    const contentHashBits = SHA256(originalContentHashStrippedPrefix + i)
+    const contentHashHex: BytesLike = `0x${contentHashBits.toString()}`
+
+    validateBytes32(contentHashHex)
+
+    contentHashWordArrays.push(contentHashBits)
+    contentHashHexStrings.push(contentHashHex)
+  }
+
+  return [contentHashWordArrays, contentHashHexStrings]
+}
+
+/**
+ * Creates a merkle tree of the media in a collection
+ *
+ * @param leaves
+ * @returns
+ */
+function constructCollectionTree(leaves: CryptoJS.lib.WordArray[]): [string, string] {
+  const tree = new MerkleTree(leaves, SHA256)
+
+  const root = `0x${tree.getRoot().toString('hex')}`
+  validateBytes32(root)
+
+  const treeJSON = JSON.stringify(tree.getLayersAsObject())
+
+  return [root, treeJSON]
+}
+
+/**
+ * Constructs MediaData for each media in a collection
+ *
+ * @param collectionData
+ * @param tokenURI
+ * @param metadataURI
+ * @param metadataHash
+ * @returns
+ */
+export function constructCollectionMediaData(
+  collectionData: CollectionData,
+  tokenURI: string,
+  metadataURI: string,
+  metadataHash: BytesLike
+): MediaData[] {
+  const collectionMediaData: MediaData[] = []
+
+  collectionData['mediaContentHashes'].forEach((contentHash) => {
+    const mediaData = constructMediaData(tokenURI, metadataURI, contentHash, metadataHash)
+    collectionMediaData.push(mediaData)
+  })
+
+  return collectionMediaData
+}
+
+/**
+ * Validates supply is an integer
+ *
+ * @param supply
+ */
+export function validateSupply(supply: number) {
+  // Throw error if user submits float for supply size
+  if (String(supply).includes('.')) {
+    invariant(false, `Collection supply ${supply} is invalid. Must be integer`)
+  }
+}
+
+/**
+ * Mints each media in a collection on an instance of the Zora Media Contract
+ *
+ * @param collectionMediaData
+ * @param bidShares
+ * @param zora
+ */
+export async function mintCollection(
+  collectionMediaData: MediaData[],
+  bidShares: BidShares,
+  zora: Zora
+) {
+  for (const media of collectionMediaData) {
+    try {
+      const tx = await zora.mint(media, bidShares)
+      await tx.wait(8)
+    } catch (err) {
+      console.log(err)
+    }
+  }
 }
