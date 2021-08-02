@@ -4,6 +4,8 @@ import {
   constructBid,
   constructBidShares,
   constructMediaData,
+  constructCollectionData,
+  constructCollectionMediaData,
   isMediaDataVerified,
   isURIHashVerified,
   recoverSignatureFromMintWithSig,
@@ -15,6 +17,7 @@ import {
   stripHexPrefix,
   validateBidShares,
   validateBytes32,
+  validateSupply,
   validateURI,
   wrapETH,
   unwrapWETH,
@@ -40,7 +43,7 @@ describe('Utils', () => {
   let defaultTokenURI: string
   let defaultMetadataURI: string
 
-  let provider = new JsonRpcProvider()
+  let provider = new JsonRpcProvider('127.0.0.1:8545')
   let blockchain = new Blockchain(provider)
 
   beforeAll(() => {
@@ -900,6 +903,69 @@ describe('Utils', () => {
         ).catch((e) => {
           expect(e.message).toContain('revert')
         })
+      })
+    })
+  })
+
+  describe('Collections', () => {
+    describe('#validateSupply', () => {
+      it('returns when an integer is passed', () => {
+        const supplyInt: number = 10
+        expect(() => {
+          validateSupply(supplyInt)
+        }).not.toThrow()
+      })
+
+      it('raises when a float is passed', () => {
+        const supplyFloat: number = 9.5
+        expect(() => {
+          validateSupply(supplyFloat)
+        }).toThrow(`Collection supply ${supplyFloat} is invalid. Must be integer`)
+      })
+    })
+
+    describe('#constructCollectionData', () => {
+      let originalContentHash: string
+      let supply: number
+
+      beforeAll(() => {
+        originalContentHash = sha256FromBuffer(Buffer.from('some content'))
+        supply = 4
+      })
+
+      it('creates CollectionData', () => {
+        const collectionData = constructCollectionData(originalContentHash, supply)
+
+        expect(collectionData.mediaSupply).toBe(supply)
+        expect(collectionData.mediaContentHashes.length).toBe(supply)
+        expect(validateBytes32(collectionData.collectionHash)).not.toThrow()
+
+        collectionData.mediaContentHashes.forEach((hash) => {
+          expect(validateBytes32(hash)).not.toThrow()
+        })
+
+        expect(`0x${collectionData.mediaTree.slice(2, 66)}`).toBe(
+          collectionData.collectionHash
+        )
+      })
+
+      it('raises if original content hash is hexstring greater than 32 bytes', () => {
+        expect(() => {
+          constructCollectionData(originalContentHash.concat('zmxnx'), supply)
+        }).toThrow(
+          `Invariant failed: ${originalContentHash.concat(
+            'zmxnx'
+          )} is not a 0x prefixed 32 bytes hex string`
+        )
+      })
+
+      it('raises if the original content hash is byte array less than 32 bytes', () => {
+        const badContentHash = Uint8Array.from(
+          Buffer.from(originalContentHash.substr(0, 62))
+        )
+        expect(() => {
+          constructCollectionData(badContentHash, supply)
+        }).toThrow('value is not a length 32 byte array')
       })
     })
   })
